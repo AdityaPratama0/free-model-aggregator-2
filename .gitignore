@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+agg2-build.log
+agg2-rewrite.log
