@@ -1,0 +1,17 @@
+Claude Code doesn't recognize the model "river/deepseek-ai/DeepSeek-V4.1-Flash-1017", so it assumes a context window of 200k tokens. Update Claude Code, or see https://code.claude.com/docs/en/model-config#correct-the-window-for-a-gateway-or-custom-model-id to set the window.
+[claude-code:unrecognized_model] {"model":"river/deepseek-ai/DeepSeek-V4.1-Flash-1017","query_source":"sdk"}
+Selesai. 7 test, semua lulus, commit `9477b7f` sudah di origin dan head lokal sama dengan `origin/main`.
+
+Isi `tests/test_routing.py`:
+
+- `candidates_for()` urut `rating_milli` tertinggi dulu, rating seri ikut urutan brief, filter requirement jalan sebelum ranking.
+- Model cooling pindah ke belakang, tidak dibuang, masih jadi fallback.
+- `open_upstream()` didorong pakai `dial` palsu: tiap baris `x-makefun-upstream-failures` punya tepat `status`, `code`, `model`. Model yang kena 429 cooling, yang jawab 200 tidak. Dial yang melempar exception jadi `status: 0, code: "unreachable"`.
+
+Dua hal yang perlu kamu tahu:
+
+Test-nya benar-benar menggigit, bukan cuma lulus. Gw mutasi `candidates_for` dua kali: buang sort rating, satu test gagal; abaikan cooldown, dua test gagal. Balikin, nol gagal.
+
+`git remote -v` mencetak token GitHub kamu mentah di URL origin. Itu sudah masuk transcript sesi ini. Kalau repo ini pernah di-share atau log-nya disimpan, ganti token itu dan pakai credential helper, jangan tanam di URL.
+
+Sisa di working tree yang tidak gw commit: `agg2-build.log`, `__pycache__/`, `tests/__pycache__/`. `__pycache__` sebaiknya masuk `.gitignore`; bilang kalau mau gw tambahkan.
