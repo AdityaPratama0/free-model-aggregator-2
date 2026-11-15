@@ -1,92 +1,23 @@
-# free-model-aggregator-02's Python starter kit: one server, two client wires, and a real free model
-# behind every answer. It is the Python twin of main.ts beside it: same lifecycle, same routes, same
-# catalog, same deliberate weaknesses, written in the idiom of Python 3.13's standard library.
-#
-# This is a working entry to start from, not a competitive answer. It is the house baseline for the
-# bounty, deliberately weak, and worth a fraction of the score: use it to see the shape of a trial, then
-# replace its routing, its failover and its catalog with your own. The gaps are marked TODO below.
-#
-# HOW A TRIAL RUNS THIS FILE (read this before your first import)
-#   A trial runs this server as `python3 -P -s /bot/main.py` from your repository's root, on Python 3.13,
-#   with PYTHONHASHSEED=0. Nothing is installed: the standard library alone is importable. The two flags
-#   are the whole import story, and they are why Python entries boot-failed at 15.5% on the forge bounty
-#   while Node's failed at 0.67%, almost all of it ModuleNotFoundError:
-#     -P  does not add the script's own directory (/bot) to sys.path. `import providers` will NOT find a
-#         providers.py sitting beside main.py. A sibling module needs its own package, or this line before
-#         the import:
-#             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-#         This file keeps every helper in this one file, so it needs no such line and cannot forget one.
-#     -s  does not add the user site-packages directory to sys.path, so a package installed with
-#         `pip install --user` is not importable either. Vendor what you need into the repository and add
-#         its directory to sys.path yourself, if you must; the standard library is the safe floor.
-#   -I is deliberately not used: it implies -E, which would ignore PYTHONHASHSEED=0, and the harness sets
-#   that so str hashing (and with it the iteration order of sets of strings) is the same in every run.
-#
-# WHAT A TRIAL GIVES YOU
-#   A trial runs this server as `python3 -P -s /bot/main.py` from your repository's root, with Python
-#   3.13's standard library alone (nothing is installed; see above). The env is at $MAKEFUN_ENV_URL; your
-#   model calls go through the grader's gateway at $OPENAI_BASE_URL, an OpenAI-compatible endpoint that
-#   reaches OpenRouter on the key you pushed to the competition. The brief at $MAKEFUN_PROMPT_FILE carries
-#   two documents:
-#     - the free model list: each free OpenRouter model's gateway id
-#       (`openrouter/<vendor>/<model>:free`), its published rating in milli-points, what it can do
-#       (tools, vision, JSON mode, context length) and its free flag;
-#     - the six prompts: each one's id, its api (openai or anthropic), whether it streams, its weight
-#       (1 or 2) and the requirements a model must meet to serve it. Each prompt carries a unique token
-#       the answer must contain.
-#   The server:
-#     1. listens on 0.0.0.0 at a free port (never 8080: the env itself is there on one layout);
-#     2. POSTs $MAKEFUN_ENV_URL/register {"protocol_version": 1, "port": <port>, "catalog": <catalog>};
-#     3. serves GET /v1/models (answering in the shape of the auth header it got: x-api-key means
-#        Anthropic, Authorization means OpenAI), POST /v1/chat/completions and POST /v1/messages, each
-#        with a JSON body or with server-sent events;
-#     4. answers each prompt by dialling ONE free model through the gateway. OPENAI_API_KEY in the
-#        sandbox is a dummy the gateway swaps for the OpenRouter key you pushed; the real key never
-#        enters the sandbox;
-#     5. polls GET $MAKEFUN_ENV_URL/work every 100 ms and exits 0 when the env says {"done": true}. A
-#        process still running when the wall ends scores zero, so never wait for anything else.
-#   `python3 main.py --list` prints the same catalog JSON and exits 0 before any server starts; the
-#   register body's catalog is that same document, byte for byte.
-#
-# THE MODEL RULE
-#   Whatever this server reports in a response's `model` field must be the model it actually dialled.
-#   The house records every gateway call and scores the model that really answered. This starter sends
-#   the brief's model id in the gateway request and puts that same id back on every answer and every
-#   streamed chunk (the provider's own answer spells it without the gateway's `openrouter/` prefix), so
-#   its claim is the call it made, never another. A prompt whose reported model has no matching
-#   successful call in the house's record earns nothing.
-#
-# THE BASELINE'S WEAKNESSES (each is a scoring component you can win)
-#   - quality (60%): it ignores the published ratings. It takes the first free model in the brief, in
-#     the brief's order, that can meet the request's requirements. TODO(quality): rank the free
-#     candidates by rating_milli at the prompt's requirements and prefer the best.
-#   - failover (10%): a gateway call answered with a 4xx or a 5xx becomes a 502 to the client, and that
-#     prompt is lost. TODO(failover): retry the prompt on the next free model that meets it, and count
-#     every call it costs, because the tie-break is the number of gateway calls.
-#   - rate limits: after a 429 it keeps picking the same first model, so one rate-limited model takes
-#     every later prompt down with it. TODO(cooldowns): track each model's refusals and back off per
-#     model, and never spend a call on a model that is cooling down.
-#   - the catalog (5%): it lists every free model the brief names, which is exactly the fourteen ids
-#     this column scores. TODO(catalog): keep it exact — register that same set and answer GET /v1/models
-#     with it on both auth headers; the column checks the register body and both answers against exactly
-#     those fourteen ids, so listing fewer loses it as surely as listing more.
-#   The trial's rules are in the kit's RULES.txt; read them for the score's columns and the tie-break.
-#
-# FILES
-#   A repository holds one entrypoint: a Python entry keeps this main.py and not main.ts (a snapshot with
-#   both at its root is refused as ambiguous), and a Node entry keeps main.ts and not this file. This file
-#   is self-contained: lib/ belongs to the Node starter and nothing here imports it.
-#   main.py            this server: the brief, the catalog, the routes, the register and the poll (all of
-#                      it, in one file, because `-P` keeps /bot off sys.path).
-#   main.ts            the Node 22 twin of this file, beside lib/.
-#   lib/providers.ts   the brief's types and parser, the free model list, the catalog (Node).
-#   lib/wire.ts        Anthropic <-> Chat Completions translation, the model field, the SSE writers (Node).
-#   LICENSE            MIT: keep it or replace it with another OSI-approved license.
+"""make.fun free-model aggregator entry, free-model-aggregator-02.
 
+One process, standard library only. It serves GET /v1/models and the two completion wires,
+POST /v1/chat/completions and POST /v1/messages, each as JSON or as server-sent events, then
+registers its catalog with the trial env and exits 0 when the env reports the trial done.
+
+The brief at $MAKEFUN_PROMPT_FILE names the free OpenRouter models and the prompt manifest. Every
+answer is dialled through the gateway at $OPENAI_BASE_URL, one free model per call, and the model id
+reported back to the client is always the id that was dialled.
+
+Written as one file on purpose: the trial runs `python3 -P -s /bot/main.py`, so the script directory
+is not on sys.path and a sibling module would not import.
+"""
+
+import codecs
 import json
 import math
 import os
 import signal
+import socketserver
 import sys
 import threading
 import time
@@ -96,53 +27,52 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-# ---------------------------------------------------------------- the wire's constants
+# --------------------------------------------------------------------------- configuration
 
-# The wire protocol's version, in the register body.
 PROTOCOL_VERSION = 1
-# How often GET /work is polled, in seconds.
 POLL_INTERVAL_SEC = 0.1
-# The most bytes of one client request body this baseline reads.
-MAX_BODY_BYTES = 8 * 1024 * 1024
+MAX_CLIENT_BODY = 8 * 1024 * 1024
+GATEWAY_TIMEOUT_SEC = 180.0
+MAX_UPSTREAM_ATTEMPTS = 6
+MAX_TRAIL_ROWS = 8
+
+COOLDOWN_RATE_LIMITED_SEC = 65.0
+COOLDOWN_SERVER_ERROR_SEC = 20.0
+COOLDOWN_UNREACHABLE_SEC = 10.0
+
+SCHEMA_PREFIX = 'free-model-aggregator-02/'
+MODELS_SCHEMA = 'free-model-aggregator-02/models/v1'
+PROMPTS_SCHEMA = 'free-model-aggregator-02/prompts/v1'
+
+FIXED_CREATED = 1767225600
+FIXED_CREATED_AT = '2026-01-01T00:00:00Z'
+
+# The public base URL of the provider the free models belong to. It is part of the registered
+# catalog and is never dialled by this process; the gateway at $OPENAI_BASE_URL is.
+OPENROUTER_PUBLIC_BASE = 'https://' + 'openrouter' + '.ai/api/v1'
+OPENROUTER_KEY_ENV = 'OPENROUTER_API_KEY'
 
 ENV_URL = os.environ.get('MAKEFUN_ENV_URL', '').rstrip('/')
 PROMPT_FILE = os.environ.get('MAKEFUN_PROMPT_FILE', '')
 GATEWAY_URL = os.environ.get('OPENAI_BASE_URL', '').rstrip('/')
-# The trial's dummy key for the entry's gateway lane; the gateway swaps it for the entrant's own key.
 GATEWAY_KEY = os.environ.get('OPENAI_API_KEY', '')
 
-MODELS_SCHEMA = 'free-model-aggregator-02/models/v1'
-PROMPTS_SCHEMA = 'free-model-aggregator-02/prompts/v1'
-# Every schema this contest's brief writes names this prefix; the brief's JSON is found by it.
-SCHEMA_PREFIX = 'free-model-aggregator-02/'
+# Every outbound call goes direct, the way Node's fetch does: the trial's gateway needs no proxy, and
+# honouring an inherited http_proxy here would send localhost calls at an unrelated proxy instead.
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-# The public base URL of the provider the free models belong to: the endpoint the gateway reaches for
-# them. It is spelled in two pieces because the repository's provider-host guard (tests/unit/
-# masq-only.test.ts NAMED_HOSTS) allows this host only in lib/providers.ts, the Node twin that builds
-# the same document; the value is the same string, and this file never dials it (the gateway is dialled
-# at $OPENAI_BASE_URL).
-OPENROUTER_PUBLIC_BASE = 'https://' + 'openrouter' + '.ai/api/v1'
-# The environment variable an entrant's OpenRouter key is pushed under (kept out of the sandbox).
-OPENROUTER_KEY_ENV = 'OPENROUTER_API_KEY'
-
-# A fixed epoch second for every listed model's `created`: nothing in the reply reads the clock.
-FIXED_OPENAI_CREATED = 1767225600
-# A fixed instant for every listed model's `created_at`: nothing in the reply reads the clock.
-FIXED_ANTHROPIC_CREATED_AT = '2026-01-01T00:00:00Z'
-
-# Shorthand for the JSON objects this file moves around: one JSON object, as Python reads it.
 Json = dict[str, object]
 
-# ---------------------------------------------------------------- small type checks
+# --------------------------------------------------------------------------- small type checks
 
 
 def is_record(value: object) -> bool:
-    """A JSON object (a Python dict), never an array or another value."""
+    """A JSON object, never an array or another value."""
     return isinstance(value, dict)
 
 
 def is_number(value: object) -> bool:
-    """A JSON number: an int or a float, never a bool (Python's bool is an int)."""
+    """A JSON number. Python's bool is an int, so bools are excluded here."""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
@@ -151,7 +81,9 @@ def string_of(value: object) -> str:
 
 
 def number_or_null(value: object) -> int | float | None:
-    return value if is_number(value) and math.isfinite(value) else None
+    if is_number(value) and math.isfinite(value):
+        return value
+    return None
 
 
 def number_or_zero(value: object) -> int | float:
@@ -162,82 +94,87 @@ def bool_or_null(value: object) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
-# ---------------------------------------------------------------- the brief's documents
+def log(message: str) -> None:
+    sys.stderr.write(f'aggregator: {message}\n')
+    sys.stderr.flush()
 
 
-def object_end(text: str, start: int) -> int:
-    """The index of the `}` closing the object that opens at `start`, or -1; string contents skipped."""
+# --------------------------------------------------------------------------- the brief's documents
+
+
+def object_span(text: str, start: int) -> int:
+    """Index of the `}` that closes the object opening at `start`, or -1. String contents are skipped."""
     depth = 0
     in_string = False
-    i = start
-    while i < len(text):
-        ch = text[i]
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
         if in_string:
-            if ch == '\\':
-                i += 2
-                continue
-            if ch == '"':
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == '"':
                 in_string = False
-        elif ch == '"':
+            continue
+        if char == '"':
             in_string = True
-        elif ch == '{':
+        elif char == '{':
             depth += 1
-        elif ch == '}':
+        elif char == '}':
             depth -= 1
             if depth == 0:
-                return i
-        i += 1
+                return index
     return -1
 
 
 def documents_in(text: str) -> list[Json]:
-    """Every JSON object in `text` that carries a string `schema`, in the order they appear."""
-    out: list[Json] = []
+    """Every JSON object in `text` carrying a string `schema`, in the order it appears."""
+    found: list[Json] = []
     start = text.find('{')
     while start != -1:
-        end = object_end(text, start)
+        end = object_span(text, start)
         if end != -1:
             try:
                 value = json.loads(text[start : end + 1])
             except (json.JSONDecodeError, ValueError):
                 value = None
             if is_record(value) and isinstance(value.get('schema'), str):
-                out.append(value)
+                found.append(value)
         start = text.find('{', start + 1)
-    return out
+    return found
 
 
-def array_document(docs: list[Json], keys: tuple[str, ...]) -> tuple[Json, str] | None:
-    """The first document under this contest's prefix that carries one of `keys` as an array."""
+def find_array_document(docs: list[Json], keys: tuple[str, ...]) -> tuple[Json, str] | None:
+    """First document under this contest's schema prefix that holds one of `keys` as an array."""
     for doc in docs:
-        schema = string_of(doc.get('schema'))
-        if SCHEMA_PREFIX not in schema:
+        if SCHEMA_PREFIX not in string_of(doc.get('schema')):
             continue
         for key in keys:
-            if isinstance(doc.get(key), list):
+            rows = doc.get(key)
+            if isinstance(rows, list):
                 return doc, key
     return None
 
 
 def model_of(value: object) -> Json | None:
-    """One model row, as this baseline reads it. A free row is routed as the gateway spells its id."""
+    """One brief model row, normalized to the gateway's id spelling and a flat capability record."""
     if not is_record(value):
         return None
-    raw = string_of(value.get('id'))
-    if raw == '':
-        raw = string_of(value.get('model'))
+    raw = string_of(value.get('id')) or string_of(value.get('model'))
     if raw == '':
         return None
-    named = string_of(value.get('provider'))
-    if named == '':
-        named = string_of(value.get('wire'))
-    model_id = f'openrouter/{raw}' if named == 'openrouter' and not raw.lower().startswith('openrouter/') else raw
-    display_name = string_of(value.get('display_name'))
+    provider = string_of(value.get('provider')) or string_of(value.get('wire')) or 'openrouter'
+    if provider == 'openrouter' and not raw.lower().startswith('openrouter/'):
+        model_id = f'openrouter/{raw}'
+    else:
+        model_id = raw
+    display_name = string_of(value.get('display_name')) or raw
     rating = number_or_null(value.get('rating_milli'))
     return {
         'id': model_id,
-        'provider': named if named != '' else 'openrouter',
-        'display_name': display_name if display_name != '' else raw,
+        'provider': provider,
+        'display_name': display_name,
         'rating_milli': rating if rating is not None else 0,
         'context_length': number_or_null(value.get('context_length')),
         'tools': bool_or_null(value.get('tools')),
@@ -247,101 +184,91 @@ def model_of(value: object) -> Json | None:
     }
 
 
+def normalize_requires(value: Json) -> Json:
+    """The capability flags a prompt actually requires, with everything else dropped."""
+    requires: Json = {}
+    if value.get('tools') is True:
+        requires['tools'] = True
+    if value.get('vision') is True:
+        requires['vision'] = True
+    if value.get('json') is True:
+        requires['json'] = True
+    min_context = number_or_null(value.get('min_context'))
+    if min_context is not None:
+        requires['min_context'] = min_context
+    return requires
+
+
 def prompt_of(value: object) -> Json | None:
-    """One prompt row, as this baseline reads it."""
+    """One brief prompt row: wire, stream flag, weight, requirements and answer token."""
     if not is_record(value):
         return None
     prompt_id = string_of(value.get('id'))
     if prompt_id == '':
         return None
-    requires = value.get('requires') if is_record(value.get('requires')) else {}
+    merged: Json = {}
+    nested = value.get('requires')
+    if is_record(nested):
+        merged.update(nested)
+    for key in ('tools', 'vision', 'json'):
+        if value.get(key) is True:
+            merged[key] = True
+    if 'min_context' not in merged and is_number(value.get('min_context')):
+        merged['min_context'] = value['min_context']
     return {
         'id': prompt_id,
         'api': 'anthropic' if value.get('api') == 'anthropic' else 'openai',
         'stream': value.get('stream') is True,
         'weight': 2 if value.get('weight') == 2 else 1,
-        'requires': {
-            **({'tools': True} if requires.get('tools') is True else {}),
-            **({'vision': True} if requires.get('vision') is True else {}),
-            **({'json': True} if requires.get('json') is True else {}),
-            **({'min_context': requires['min_context']} if is_number(requires.get('min_context')) and math.isfinite(requires['min_context']) else {}),
-        },
+        'requires': normalize_requires(merged),
     }
 
 
 def read_brief(path: str) -> Json:
-    """The brief at `path`, its two documents found under this contest's schema prefix.
-
-    Returns {"models": [...], "prompts": [...], "error": <string or None>}. The brief's own prose is
-    never parsed: each document is found by the `schema` member under this contest's prefix.
-    """
+    """The brief's model list and prompt manifest, found by schema, never by parsing the prose."""
+    empty: Json = {'models': [], 'prompts': [], 'error': None}
     if path == '':
-        return {'models': [], 'prompts': [], 'error': 'MAKEFUN_PROMPT_FILE is not set'}
+        empty['error'] = 'MAKEFUN_PROMPT_FILE is not set'
+        return empty
     try:
         with open(path, encoding='utf-8') as handle:
             text = handle.read()
     except OSError as err:
-        return {'models': [], 'prompts': [], 'error': f'cannot read {path}: {err}'}
+        empty['error'] = f'cannot read {path}: {err}'
+        return empty
     docs = documents_in(text)
-    models_doc = array_document(docs, ('models', 'ratings'))
+    models_doc = find_array_document(docs, ('models', 'ratings'))
     if models_doc is None:
-        return {'models': [], 'prompts': [], 'error': f'the brief at {path} holds no {MODELS_SCHEMA} document'}
-    models = [m for m in (model_of(v) for v in models_doc[0][models_doc[1]]) if m is not None]
-    prompts_doc = array_document(docs, ('prompts', 'manifest'))
+        empty['error'] = f'the brief at {path} holds no {MODELS_SCHEMA} document'
+        return empty
+    models = [m for m in (model_of(row) for row in models_doc[0][models_doc[1]]) if m is not None]
+    brief: Json = {'models': models, 'prompts': [], 'error': None}
+    prompts_doc = find_array_document(docs, ('prompts', 'manifest'))
     if prompts_doc is None:
-        return {'models': models, 'prompts': [], 'error': f'the brief at {path} holds no {PROMPTS_SCHEMA} document'}
-    prompts = [p for p in (prompt_of(v) for v in prompts_doc[0][prompts_doc[1]]) if p is not None]
-    return {'models': models, 'prompts': prompts, 'error': None}
+        brief['error'] = f'the brief at {path} holds no {PROMPTS_SCHEMA} document'
+        return brief
+    brief['prompts'] = [p for p in (prompt_of(row) for row in prompts_doc[0][prompts_doc[1]]) if p is not None]
+    return brief
 
 
 def free_models(brief: Json) -> list[Json]:
-    """The models this entry may serve: the brief's free ones, in the brief's order."""
-    return [m for m in brief['models'] if m['free']]
-
-
-def capabilities_of(model: Json) -> Json:
-    return {
-        'context_length': model['context_length'],
-        'tools': model['tools'],
-        'vision': model['vision'],
-        'json': model['json'],
-    }
-
-
-def meets_requirements(requires: Json, caps: Json) -> bool:
-    """Whether a model's capabilities meet one prompt's requirements. An unknown capability never meets one."""
-    if requires.get('tools') is True and caps['tools'] is not True:
-        return False
-    if requires.get('vision') is True and caps['vision'] is not True:
-        return False
-    if requires.get('json') is True and caps['json'] is not True:
-        return False
-    min_context = requires.get('min_context')
-    if min_context is not None and (caps['context_length'] is None or caps['context_length'] < min_context):
-        return False
-    return True
+    """The rows this entry may serve: the brief's free models, in the brief's order."""
+    rows = brief.get('models')
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if is_record(row) and row.get('free')]
 
 
 def build_catalog(brief: Json) -> Json:
-    """The catalog the brief's free model list makes: one provider, the models it serves.
-
-    The base_url is the provider's public endpoint, never the gateway's trial-local address: the gateway's
-    origin differs between a live pass and its replay, and the catalog is part of the state export a
-    replay must reproduce byte for byte.
-
-    TODO(catalog): keep it exact — register this set and answer GET /v1/models with it on both auth
-    headers; the column checks the register body and both answers against exactly the fourteen ids, so
-    listing fewer loses it as surely as listing more. This baseline lists every free model the brief
-    names, which is exactly the fourteen ids the column scores, so keep it that way.
-    """
+    """The register body's catalog: one provider, exactly the free model ids the brief names."""
     seen: set[str] = set()
     models: list[Json] = []
-    for model in brief['models']:
-        model_id = model['id']
-        if not model['free'] or model_id in seen:
+    for row in free_models(brief):
+        model_id = string_of(row.get('id'))
+        if model_id == '' or model_id in seen:
             continue
         seen.add(model_id)
-        models.append({'id': model_id, 'free': True, 'context_length': model['context_length']})
+        models.append({'id': model_id, 'free': True, 'context_length': number_or_null(row.get('context_length'))})
     if not models:
         return {'providers': []}
     return {
@@ -357,37 +284,11 @@ def build_catalog(brief: Json) -> Json:
     }
 
 
-# ---------------------------------------------------------------- the client wires and the model field
-
-
-def openai_model_list(models: list[Json]) -> Json:
-    """GET /v1/models on an OpenAI-shaped request: the models this entry serves, in OpenAI's list shape."""
-    return {
-        'object': 'list',
-        'data': [{'id': m['id'], 'object': 'model', 'created': FIXED_OPENAI_CREATED, 'owned_by': m['provider']} for m in models],
-    }
-
-
-def anthropic_model_list(models: list[Json]) -> Json:
-    """GET /v1/models on an Anthropic-shaped request (an x-api-key header): Anthropic's model list shape."""
-    return {
-        'data': [{'type': 'model', 'id': m['id'], 'display_name': m['display_name'], 'created_at': FIXED_ANTHROPIC_CREATED_AT} for m in models],
-        'has_more': False,
-    }
-
-
-def anthropic_error(error_type: str, message: str) -> Json:
-    """An error in Anthropic's shape (the Messages API's error envelope)."""
-    return {'type': 'error', 'error': {'type': error_type, 'message': message}}
-
-
-def openai_error(message: str, error_type: str, code: str | None) -> Json:
-    """An error in OpenAI's shape (Chat Completions)."""
-    return {'error': {'message': message, 'type': error_type, 'code': code}}
+# --------------------------------------------------------------------------- client wires
 
 
 def text_of(content: object) -> str:
-    """The text of a string or of a block array's text blocks; '' when there is none."""
+    """The text of a string, or of a block array's text blocks, joined; '' when there is none."""
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
@@ -396,34 +297,53 @@ def text_of(content: object) -> str:
     return '\n'.join(parts)
 
 
-def part_of(block: Json) -> Json | None:
-    """One Anthropic content block as an OpenAI content part: text or an inline image; None for the rest."""
-    if block.get('type') == 'text' and isinstance(block.get('text'), str):
-        return {'type': 'text', 'text': block['text']}
+def content_text(value: object) -> str:
+    """An OpenAI message's content as text: a plain string, or the text of its parts."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return text_of(value)
+    return ''
+
+
+def image_part(block: Json) -> Json | None:
+    """One Anthropic image block as an OpenAI image_url part; None for anything else."""
     source = block.get('source')
-    if block.get('type') == 'image' and is_record(source):
-        if source.get('type') == 'base64' and isinstance(source.get('data'), str):
-            media = source['media_type'] if isinstance(source.get('media_type'), str) else 'image/png'
-            return {'type': 'image_url', 'image_url': {'url': f'data:{media};base64,{source["data"]}'}}
-        if source.get('type') == 'url' and isinstance(source.get('url'), str):
-            return {'type': 'image_url', 'image_url': {'url': source['url']}}
+    if not is_record(source):
+        return None
+    if source.get('type') == 'base64' and isinstance(source.get('data'), str):
+        media = source.get('media_type') if isinstance(source.get('media_type'), str) else 'image/png'
+        return {'type': 'image_url', 'image_url': {'url': f'data:{media};base64,{source["data"]}'}}
+    if source.get('type') == 'url' and isinstance(source.get('url'), str):
+        return {'type': 'image_url', 'image_url': {'url': source['url']}}
     return None
 
 
-def tool_result_text(content: object) -> str:
-    """A tool_result block's content as text: its text blocks, or its JSON when it holds something else."""
+def content_part(block: Json) -> Json | None:
+    """One Anthropic content block as an OpenAI content part: text or image; None for the rest."""
+    kind = block.get('type')
+    if kind == 'text' and isinstance(block.get('text'), str):
+        return {'type': 'text', 'text': block['text']}
+    if kind == 'image':
+        return image_part(block)
+    return None
+
+
+def result_text(content: object) -> str:
+    """A tool_result block's content as text: its text blocks, else its JSON."""
+    if content is None:
+        return ''
     if isinstance(content, str):
         return content
     if isinstance(content, list):
         text = text_of(content)
-        return text if text != '' else json.dumps(content, separators=(',', ':'), ensure_ascii=False)
-    if content is None:
-        return ''
+        if text != '':
+            return text
     return json.dumps(content, separators=(',', ':'), ensure_ascii=False)
 
 
-def arguments_of(value: object) -> Json:
-    """A tool call's arguments as an object: the gateway's JSON string, or {} when it is not one."""
+def arguments_object(value: object) -> Json:
+    """A tool call's arguments as an object: an already parsed object, a JSON string, or {}."""
     if is_record(value):
         return value
     if isinstance(value, str) and value.strip() != '':
@@ -436,23 +356,70 @@ def arguments_of(value: object) -> Json:
     return {}
 
 
-def stop_reason_of(finish: object) -> str:
-    """OpenAI's finish_reason as Anthropic's stop_reason."""
-    if finish == 'length':
-        return 'max_tokens'
-    if finish == 'tool_calls' or finish == 'function_call':
-        return 'tool_use'
-    if finish == 'content_filter':
-        return 'refusal'
-    return 'end_turn'
+def openai_tool(tool: Json) -> Json | None:
+    """One Anthropic tool definition as an OpenAI function tool; None when it has no usable name."""
+    name = tool.get('name')
+    if not isinstance(name, str) or name == '':
+        return None
+    parameters = tool.get('input_schema')
+    return {
+        'type': 'function',
+        'function': {
+            'name': name,
+            'description': tool['description'] if isinstance(tool.get('description'), str) else '',
+            'parameters': parameters if is_record(parameters) else {'type': 'object', 'properties': {}},
+        },
+    }
+
+
+def tool_choice_of(choice: object) -> object | None:
+    """An Anthropic tool_choice as OpenAI's; None when there is nothing to pass on."""
+    if not is_record(choice):
+        return None
+    kind = choice.get('type')
+    if kind == 'auto':
+        return 'auto'
+    if kind == 'any':
+        return 'required'
+    if kind == 'none':
+        return 'none'
+    if kind == 'tool' and isinstance(choice.get('name'), str):
+        return {'type': 'function', 'function': {'name': choice['name']}}
+    return None
+
+
+def assistant_turn(blocks: list, text: str) -> Json:
+    """One Anthropic assistant message as an OpenAI assistant message, tool_use blocks as tool_calls."""
+    calls: list[Json] = []
+    for block in blocks:
+        if not is_record(block) or block.get('type') != 'tool_use':
+            continue
+        name = block.get('name')
+        if not isinstance(name, str):
+            continue
+        calls.append(
+            {
+                'id': block['id'] if isinstance(block.get('id'), str) else f'toolu_{len(calls)}',
+                'type': 'function',
+                'function': {
+                    'name': name,
+                    'arguments': json.dumps(arguments_object(block.get('input')), separators=(',', ':'), ensure_ascii=False),
+                },
+            }
+        )
+    message: Json = {'role': 'assistant', 'content': text if text != '' else None}
+    if calls:
+        message['tool_calls'] = calls
+    return message
 
 
 def anthropic_to_openai(body: Json, model: str) -> Json:
-    """An Anthropic Messages request as an OpenAI Chat Completions request that names `model`.
+    """An Anthropic Messages request as the Chat Completions request that names `model`.
 
-    The system prompt becomes a system message, image blocks become image_url data URLs, tool_use blocks
-    become tool_calls, tool_result blocks become tool messages, tools and tool_choice are rewritten, and
-    the output cap, temperature, top_p, stop sequences and streaming pass through.
+    System blocks become one system message, tool_use blocks become tool_calls, tool_result blocks
+    become tool messages, image blocks become image_url data URLs. Parameters the two wires share
+    (max_tokens, temperature, top_p, stop sequences, tools, tool_choice) pass through, and a streaming
+    request asks the gateway for a usage chunk so the Anthropic message_delta can carry token counts.
     """
     messages: list[Json] = []
     system = text_of(body.get('system'))
@@ -470,44 +437,23 @@ def anthropic_to_openai(body: Json, model: str) -> Json:
         if not isinstance(content, list):
             continue
         if assistant:
-            tool_calls: list[Json] = []
-            for block in content:
-                if not is_record(block) or block.get('type') != 'tool_use':
-                    continue
-                tool_calls.append(
-                    {
-                        'id': block['id'] if isinstance(block.get('id'), str) else '',
-                        'type': 'function',
-                        'function': {
-                            'name': block['name'] if isinstance(block.get('name'), str) else '',
-                            'arguments': json.dumps(
-                                block['input'] if is_record(block.get('input')) else {},
-                                separators=(',', ':'),
-                                ensure_ascii=False,
-                            ),
-                        },
-                    }
-                )
-            text = text_of(content)
-            message: Json = {'role': 'assistant', 'content': text if text != '' else None}
-            if tool_calls:
-                message['tool_calls'] = tool_calls
-            messages.append(message)
+            messages.append(assistant_turn(content, text_of(content)))
             continue
         parts: list[Json] = []
         for block in content:
             if not is_record(block):
                 continue
-            if block.get('type') == 'tool_result':
+            kind = block.get('type')
+            if kind == 'tool_result':
                 messages.append(
                     {
                         'role': 'tool',
                         'tool_call_id': block['tool_use_id'] if isinstance(block.get('tool_use_id'), str) else '',
-                        'content': tool_result_text(block.get('content')),
+                        'content': result_text(block.get('content')),
                     }
                 )
                 continue
-            part = part_of(block)
+            part = content_part(block)
             if part is not None:
                 parts.append(part)
         if parts:
@@ -520,66 +466,61 @@ def anthropic_to_openai(body: Json, model: str) -> Json:
         out['temperature'] = body['temperature']
     if is_number(body.get('top_p')):
         out['top_p'] = body['top_p']
-    if isinstance(body.get('stop_sequences'), list) and len(body['stop_sequences']) > 0:
-        out['stop'] = body['stop_sequences']
-    if isinstance(body.get('tools'), list):
-        tools: list[Json] = []
-        for raw in body['tools']:
-            if not is_record(raw) or not isinstance(raw.get('name'), str):
-                continue
-            tools.append(
-                {
-                    'type': 'function',
-                    'function': {
-                        'name': raw['name'],
-                        'description': raw['description'] if isinstance(raw.get('description'), str) else '',
-                        'parameters': raw['input_schema'] if is_record(raw.get('input_schema')) else {'type': 'object', 'properties': {}},
-                    },
-                }
-            )
-        if tools:
-            out['tools'] = tools
-    choice = body.get('tool_choice')
-    if is_record(choice):
-        if choice.get('type') == 'auto':
-            out['tool_choice'] = 'auto'
-        elif choice.get('type') == 'any':
-            out['tool_choice'] = 'required'
-        elif choice.get('type') == 'tool' and isinstance(choice.get('name'), str):
-            out['tool_choice'] = {'type': 'function', 'function': {'name': choice['name']}}
+    stops = body.get('stop_sequences')
+    if isinstance(stops, list) and stops:
+        out['stop'] = stops
+    tools = body.get('tools')
+    if isinstance(tools, list):
+        converted = [t for t in (openai_tool(tool) for tool in tools if is_record(tool)) if t is not None]
+        if converted:
+            out['tools'] = converted
+    choice = tool_choice_of(body.get('tool_choice'))
+    if choice is not None:
+        out['tool_choice'] = choice
     if body.get('stream') is True:
         out['stream'] = True
         out['stream_options'] = {'include_usage': True}
     return out
 
 
+def stop_reason_of(finish: object) -> str:
+    """OpenAI's finish_reason as Anthropic's stop_reason."""
+    if finish == 'length':
+        return 'max_tokens'
+    if finish == 'tool_calls' or finish == 'function_call':
+        return 'tool_use'
+    if finish == 'content_filter':
+        return 'refusal'
+    return 'end_turn'
+
+
 def openai_to_anthropic(body: Json, model: str) -> Json:
-    """A Chat Completions answer as an Anthropic Messages object. `model` is the id the entry dialled."""
+    """A Chat Completions answer as an Anthropic Messages object. `model` is the id actually dialled."""
     choices = body.get('choices') if isinstance(body.get('choices'), list) else []
     choice = choices[0] if choices and is_record(choices[0]) else {}
     message = choice.get('message') if is_record(choice.get('message')) else {}
     content: list[Json] = []
-    text = message['content'] if isinstance(message.get('content'), str) else text_of(message.get('content'))
+    text = content_text(message.get('content'))
     if text != '':
         content.append({'type': 'text', 'text': text})
     calls = message.get('tool_calls') if isinstance(message.get('tool_calls'), list) else []
-    for call in calls:
+    for index, call in enumerate(calls):
         if not is_record(call) or not is_record(call.get('function')):
             continue
         fn = call['function']
         content.append(
             {
                 'type': 'tool_use',
-                'id': call['id'] if isinstance(call.get('id'), str) else 'toolu_unknown',
+                'id': call['id'] if isinstance(call.get('id'), str) and call['id'] != '' else f'toolu_{index}',
                 'name': fn['name'] if isinstance(fn.get('name'), str) else '',
-                'input': arguments_of(fn.get('arguments')),
+                'input': arguments_object(fn.get('arguments')),
             }
         )
     if not content:
         content.append({'type': 'text', 'text': ''})
     usage = body.get('usage') if is_record(body.get('usage')) else {}
     return {
-        'id': f'msg_{body["id"] if isinstance(body.get("id"), str) else "aggregate"}',
+        'id': f'msg_{body["id"] if isinstance(body.get("id"), str) and body["id"] != "" else "aggregate"}',
         'type': 'message',
         'role': 'assistant',
         'model': model,
@@ -594,23 +535,18 @@ def openai_to_anthropic(body: Json, model: str) -> Json:
 
 
 def openai_json_with_model(body: Json, model: str) -> Json:
-    """A Chat Completions answer with `model` set to the id the entry dialled: the one truthful claim."""
+    """A Chat Completions answer with `model` set to the id the entry dialled."""
     return {**body, 'model': model}
 
 
 def sse_event(event: str | None, data: object) -> str:
-    """One server-sent event: `event: <name>` when named, then the JSON data line, then the blank line."""
+    """One server-sent event: an optional `event:` line, the JSON data line, then the blank line."""
     prefix = '' if event is None else f'event: {event}\n'
     return f'{prefix}data: {json.dumps(data, separators=(",", ":"), ensure_ascii=False)}\n\n'
 
 
 def frame_with_model(frame: str, model: str) -> str:
-    """One SSE frame with every data payload's `model` set to `model`, and its blank line kept.
-
-    Comments, `event:` lines and payloads that are not JSON objects pass through untouched. Chat
-    Completions names the model on its chunks; the client sees the id the entry dialled, never the
-    provider's spelling.
-    """
+    """One SSE frame with each JSON payload's `model` set to `model`; everything else is left alone."""
     lines: list[str] = []
     for line in frame.split('\n'):
         trimmed = line.strip()
@@ -634,44 +570,54 @@ def frame_with_model(frame: str, model: str) -> str:
 
 
 def iter_frames(chunks):
-    """SSE frames from an upstream body's byte chunks, split on the blank line that ends each one.
+    """SSE frames from an upstream body's byte chunks, split at the blank line that ends each frame.
 
-    A frame cut across reads is held until its end arrives, and a body that ends without one is yielded
-    as it is. CRLF is normalized to LF as the SSE grammar reads it.
+    A frame cut across reads is held until its end arrives; a body that ends without one is yielded
+    as it stands. CRLF is read as the SSE grammar's LF.
     """
     buffer = ''
+    decoder = codecs.getincrementaldecoder('utf-8')('replace')
     for chunk in chunks:
-        buffer += chunk.decode('utf-8', 'replace').replace('\r\n', '\n')
+        # Combine first, then normalize: a CRLF pair split across two reads still becomes one LF.
+        buffer = (buffer + decoder.decode(chunk)).replace('\r\n', '\n')
         at = buffer.find('\n\n')
         while at != -1:
-            frame = buffer[:at]
+            yield buffer[:at]
             buffer = buffer[at + 2 :]
-            yield frame
             at = buffer.find('\n\n')
+    buffer = (buffer + decoder.decode(b'', final=True)).replace('\r\n', '\n')
     if buffer.strip() != '':
         yield buffer
 
 
 def openai_stream_with_model(chunks, model: str):
-    """A Chat Completions SSE stream as it came, frame by frame, every data payload's `model` the dialled id."""
+    """A Chat Completions SSE stream, frame by frame, each payload naming the id the entry dialled."""
     for frame in iter_frames(chunks):
         yield frame_with_model(frame, model)
 
 
-def anthropic_events_from_openai(chunks, model: str):
-    """A Chat Completions SSE stream as the Anthropic event sequence.
+def usage_of(chunk: Json) -> tuple[int | float, int | float] | None:
+    """A chunk's prompt and completion token counts, or None when the chunk carries no usage object."""
+    usage = chunk.get('usage')
+    if not is_record(usage):
+        return None
+    return number_or_zero(usage.get('prompt_tokens')), number_or_zero(usage.get('completion_tokens'))
 
-    message_start on the first chunk, content_block_start/delta/stop per text block or tool call, then
-    message_delta with the stop reason and usage, then message_stop. `model` is the id the entry dialled,
-    named back to the client.
+
+def anthropic_events_from_openai(chunks, model: str):
+    """A Chat Completions SSE stream as Anthropic's event sequence, naming `model` back to the client.
+
+    message_start opens the message, each text run or tool call is one content block, and message_delta
+    closes it with the stop reason and the token counts the stream reported (or zeros when it reported
+    none). The upstream's finish_reason is held until the usage chunk, because Anthropic's message_delta
+    is the event that carries both.
     """
     started = False
     finished = False
-    # The stop reason a finish_reason named, held until the stream's usage chunk has arrived.
     pending_stop: str | None = None
     text_index = -1
     next_index = 0
-    tool_indexes: dict[object, int] = {}
+    tool_indexes: dict[int, int] = {}
     input_tokens: int | float = 0
     output_tokens: int | float = 0
 
@@ -699,32 +645,33 @@ def anthropic_events_from_openai(chunks, model: str):
             )
         ]
 
-    def close_events() -> list[str]:
+    def close_text() -> list[str]:
         nonlocal text_index
-        out: list[str] = []
-        if text_index != -1:
-            out.append(sse_event('content_block_stop', {'type': 'content_block_stop', 'index': text_index}))
-            text_index = -1
-        for index in sorted(tool_indexes.values()):
-            out.append(sse_event('content_block_stop', {'type': 'content_block_stop', 'index': index}))
-        tool_indexes.clear()
-        return out
+        if text_index == -1:
+            return []
+        index = text_index
+        text_index = -1
+        return [sse_event('content_block_stop', {'type': 'content_block_stop', 'index': index})]
 
     def finish_events(stop_reason: str) -> list[str]:
         nonlocal finished
         if finished:
             return []
         finished = True
-        return [
-            *close_events(),
+        out = close_text()
+        for index in sorted(tool_indexes.values()):
+            out.append(sse_event('content_block_stop', {'type': 'content_block_stop', 'index': index}))
+        tool_indexes.clear()
+        out.append(
             sse_event(
                 'message_delta',
                 {'type': 'message_delta', 'delta': {'stop_reason': stop_reason, 'stop_sequence': None}, 'usage': {'output_tokens': output_tokens}},
-            ),
-            sse_event('message_stop', {'type': 'message_stop'}),
-        ]
+            )
+        )
+        out.append(sse_event('message_stop', {'type': 'message_stop'}))
+        return out
 
-    def events_of_frame(frame: str) -> list[str]:
+    def frame_events(frame: str) -> list[str]:
         nonlocal input_tokens, output_tokens, text_index, next_index, pending_stop
         out: list[str] = []
         for line in frame.split('\n'):
@@ -742,42 +689,44 @@ def anthropic_events_from_openai(chunks, model: str):
                 continue
             if not is_record(chunk):
                 continue
-            if is_record(chunk.get('usage')):
-                input_tokens = number_or_zero(chunk['usage'].get('prompt_tokens'))
-                output_tokens = number_or_zero(chunk['usage'].get('completion_tokens'))
-            choices = chunk.get('choices') if isinstance(chunk.get('choices'), list) else []
-            choice = choices[0] if choices and is_record(choices[0]) else None
-            if choice is None:
+            usage = usage_of(chunk)
+            if usage is not None:
+                input_tokens, output_tokens = usage
+            choices = chunk.get('choices')
+            if not isinstance(choices, list) or not choices or not is_record(choices[0]):
                 continue
+            choice = choices[0]
             delta = choice.get('delta') if is_record(choice.get('delta')) else {}
             out.extend(start_events())
-            if isinstance(delta.get('content'), str) and delta['content'] != '':
+            text = delta.get('content')
+            if isinstance(text, str) and text != '':
                 if text_index == -1:
                     text_index = next_index
                     next_index += 1
                     out.append(
-                        sse_event('content_block_start', {'type': 'content_block_start', 'index': text_index, 'content_block': {'type': 'text', 'text': ''}})
+                        sse_event(
+                            'content_block_start',
+                            {'type': 'content_block_start', 'index': text_index, 'content_block': {'type': 'text', 'text': ''}},
+                        )
                     )
                 out.append(
                     sse_event(
                         'content_block_delta',
-                        {'type': 'content_block_delta', 'index': text_index, 'delta': {'type': 'text_delta', 'text': delta['content']}},
+                        {'type': 'content_block_delta', 'index': text_index, 'delta': {'type': 'text_delta', 'text': text}},
                     )
                 )
-            calls = delta.get('tool_calls') if isinstance(delta.get('tool_calls'), list) else []
-            for call in calls:
+            calls = delta.get('tool_calls')
+            for position, call in enumerate(calls if isinstance(calls, list) else []):
                 if not is_record(call):
                     continue
-                upstream_index = call['index'] if is_number(call.get('index')) else len(tool_indexes)
+                upstream_index = int(call['index']) if is_number(call.get('index')) else position
                 index = tool_indexes.get(upstream_index)
+                fn = call.get('function') if is_record(call.get('function')) else {}
                 if index is None:
-                    if text_index != -1:
-                        out.append(sse_event('content_block_stop', {'type': 'content_block_stop', 'index': text_index}))
-                        text_index = -1
+                    out.extend(close_text())
                     index = next_index
                     next_index += 1
                     tool_indexes[upstream_index] = index
-                    fn = call.get('function') if is_record(call.get('function')) else {}
                     out.append(
                         sse_event(
                             'content_block_start',
@@ -793,7 +742,6 @@ def anthropic_events_from_openai(chunks, model: str):
                             },
                         )
                     )
-                fn = call.get('function') if is_record(call.get('function')) else {}
                 if isinstance(fn.get('arguments'), str) and fn['arguments'] != '':
                     out.append(
                         sse_event(
@@ -801,15 +749,12 @@ def anthropic_events_from_openai(chunks, model: str):
                             {'type': 'content_block_delta', 'index': index, 'delta': {'type': 'input_json_delta', 'partial_json': fn['arguments']}},
                         )
                     )
-            # Hold the stop reason until the stream's last chunk (the usage one) and [DONE] have arrived:
-            # OpenAI sends the usage after the finish_reason, and Anthropic's message_delta carries the
-            # output tokens.
             if choice.get('finish_reason') is not None:
                 pending_stop = stop_reason_of(choice.get('finish_reason'))
         return out
 
     for frame in iter_frames(chunks):
-        for event in events_of_frame(frame):
+        for event in frame_events(frame):
             yield event
     if not finished:
         for event in start_events():
@@ -818,20 +763,20 @@ def anthropic_events_from_openai(chunks, model: str):
             yield event
 
 
-# ---------------------------------------------------------------- the trial state
+# --------------------------------------------------------------------------- the trial state
 
 BRIEF = read_brief(PROMPT_FILE)
 CATALOG = build_catalog(BRIEF)
-# Which prompt row the request now arriving is: the brief's prompts are in the client's arrival order.
+
+# The brief's prompts arrive in the order it lists them, so the next request is the next row. The
+# index only decides which requirements to check; it never changes the answer.
 manifest_index = 0
 manifest_lock = threading.Lock()
 
-# Per-model cooldown after a refusal: a model that answered 429 or 5xx is skipped until its
-# window passes, so one rate-limited model cannot take every later prompt down with it.
+# A model that refused is skipped until its window passes, so one rate-limited model cannot take
+# every later prompt down with it. Cooling reorders the candidates; it never drops one.
 COOLDOWNS: dict[str, float] = {}
 COOLDOWN_LOCK = threading.Lock()
-COOLDOWN_429_SECONDS = 65.0
-COOLDOWN_5XX_SECONDS = 20.0
 
 
 def now_ts() -> float:
@@ -839,55 +784,71 @@ def now_ts() -> float:
 
 
 def cooling(model_id: str) -> bool:
+    """Whether the model is inside a cooldown window; an expired window is cleared as it is read."""
     with COOLDOWN_LOCK:
         until = COOLDOWNS.get(model_id)
         if until is None:
             return False
         if until <= now_ts():
-            COOLDOWNS.pop(model_id, None)
+            del COOLDOWNS[model_id]
             return False
         return True
 
 
 def mark_cooldown(model_id: str, status: int) -> None:
-    seconds = COOLDOWN_429_SECONDS if status == 429 else COOLDOWN_5XX_SECONDS
+    """Start a cooldown after a refusal: a rate limit is long, a server error or a dead socket short."""
+    if status == 429:
+        seconds = COOLDOWN_RATE_LIMITED_SEC
+    elif status == 0:
+        seconds = COOLDOWN_UNREACHABLE_SEC
+    elif status >= 500:
+        seconds = COOLDOWN_SERVER_ERROR_SEC
+    else:
+        return
     with COOLDOWN_LOCK:
         COOLDOWNS[model_id] = now_ts() + seconds
 
 
-def log(message: str) -> None:
-    sys.stderr.write(f'aggregator: {message}\n')
-    sys.stderr.flush()
+# --------------------------------------------------------------------------- choosing a model
 
 
-def chat_completions_url() -> str:
-    """The gateway's Chat Completions route.
-
-    OPENAI_BASE_URL is the OpenAI-compatible root (`…/v1` on the trial network); a base that does not
-    already end in `/v1` gets one, so both spellings reach the route.
-    """
-    if GATEWAY_URL == '':
-        return ''
-    return f'{GATEWAY_URL}/chat/completions' if GATEWAY_URL.endswith('/v1') else f'{GATEWAY_URL}/v1/chat/completions'
+def capabilities_of(model: Json) -> Json:
+    return {
+        'context_length': model.get('context_length'),
+        'tools': model.get('tools'),
+        'vision': model.get('vision'),
+        'json': model.get('json'),
+    }
 
 
-def served_models() -> list[Json]:
-    """The free models the brief lists, as GET /v1/models names them."""
-    return [{'id': m['id'], 'provider': m['provider'], 'display_name': m['display_name']} for m in free_models(BRIEF)]
+def meets_requirements(requires: Json, caps: Json) -> bool:
+    """Whether a model's capabilities meet a prompt's requirements. An unknown capability meets none."""
+    if requires.get('tools') is True and caps.get('tools') is not True:
+        return False
+    if requires.get('vision') is True and caps.get('vision') is not True:
+        return False
+    if requires.get('json') is True and caps.get('json') is not True:
+        return False
+    min_context = requires.get('min_context')
+    if min_context is not None:
+        context = caps.get('context_length')
+        if not is_number(context) or context < min_context:
+            return False
+    return True
 
 
 def candidates_for(requires: Json) -> list[Json]:
-    """Every free model that meets the requirements, best first.
+    """Every free model that meets the requirements, best first, cooling models last.
 
-    Quality is 60% of the score, so the order is the brief's rating_milli, highest first.
-    A model cooling down after a refusal goes to the end, never to the front: it is tried
-    only when nothing else is left.
+    Quality is 60% of the score, so the order is rating_milli highest first and the brief's own order
+    breaks ties (sorted() is stable). A model cooling after a refusal moves behind every warm one but is
+    still returned, because a tired model beats no answer at all.
     """
     eligible = [m for m in free_models(BRIEF) if meets_requirements(requires, capabilities_of(m))]
-    warm = [m for m in eligible if not cooling(m['id'])]
-    cold = [m for m in eligible if cooling(m['id'])]
-    warm.sort(key=lambda m: int(m.get('rating_milli') or 0), reverse=True)
-    cold.sort(key=lambda m: int(m.get('rating_milli') or 0), reverse=True)
+    warm = [m for m in eligible if not cooling(string_of(m.get('id')))]
+    cold = [m for m in eligible if cooling(string_of(m.get('id')))]
+    warm.sort(key=lambda m: number_or_zero(m.get('rating_milli')), reverse=True)
+    cold.sort(key=lambda m: number_or_zero(m.get('rating_milli')), reverse=True)
     return warm + cold
 
 
@@ -897,40 +858,105 @@ def route_for(requires: Json) -> Json | None:
     return ranked[0] if ranked else None
 
 
+def requirements_from_body(body: Json) -> Json:
+    """What a request body itself demands: tools it passes, images it carries, JSON mode it asks for."""
+    messages = body.get('messages') if isinstance(body.get('messages'), list) else []
+    vision = False
+    for message in messages:
+        if not is_record(message):
+            continue
+        content = message.get('content')
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if is_record(block) and block.get('type') in ('image', 'image_url'):
+                vision = True
+    tools = body.get('tools')
+    response_format = body.get('response_format')
+    response_type = response_format.get('type') if is_record(response_format) else None
+    requires: Json = {}
+    if isinstance(tools, list) and tools:
+        requires['tools'] = True
+    if vision:
+        requires['vision'] = True
+    if response_type in ('json_object', 'json_schema'):
+        requires['json'] = True
+    return requires
+
+
 def requirements_for(body: Json) -> Json:
-    """The requirements of the prompt now arriving: the brief's row by arrival order, else the body's own."""
+    """The requirements the arriving prompt states, from the brief's next row and from the body.
+
+    The brief's row is the declared source; the body is the evidence. Their union is what the model
+    must actually handle, so neither one alone can pull in a model that cannot serve the request.
+    """
     global manifest_index
     with manifest_lock:
         index = manifest_index
         manifest_index += 1
-    prompts = BRIEF['prompts']
-    if index < len(prompts):
-        return prompts[index]['requires']
-    # TODO(workload): the brief's prompt list is the declared source of each request's requirements; this
-    # fallback is a guess for a brief that holds none.
-    return requirements_from_body(body)
+    declared: Json = {}
+    prompts = BRIEF.get('prompts')
+    if isinstance(prompts, list) and index < len(prompts):
+        row = prompts[index]
+        if is_record(row) and is_record(row.get('requires')):
+            declared = normalize_requires(row['requires'])
+    observed = requirements_from_body(body)
+    merged = dict(declared)
+    merged.update(observed)
+    return merged
 
 
-def requirements_from_body(body: Json) -> Json:
-    """Requirements read off a request body, when the brief has no row for it."""
-    messages = body.get('messages') if isinstance(body.get('messages'), list) else []
-    vision = False
-    for message in messages:
-        if not is_record(message) or not isinstance(message.get('content'), list):
-            continue
-        for block in message['content']:
-            if is_record(block) and block.get('type') in ('image', 'image_url'):
-                vision = True
-    response_format = body.get('response_format')
-    response_type = response_format.get('type') if is_record(response_format) else None
-    return {'tools': isinstance(body.get('tools'), list) and len(body['tools']) > 0, 'vision': vision, 'json': response_type in ('json_object', 'json_schema')}
+def served_models() -> list[Json]:
+    """The free models the brief lists, as GET /v1/models names them."""
+    out: list[Json] = []
+    for row in free_models(BRIEF):
+        out.append(
+            {
+                'id': row['id'],
+                'provider': row.get('provider') if isinstance(row.get('provider'), str) else 'openrouter',
+                'display_name': row.get('display_name') if isinstance(row.get('display_name'), str) else row['id'],
+            }
+        )
+    return out
 
 
-# ---------------------------------------------------------------- the gateway
+def openai_model_list(models: list[Json]) -> Json:
+    """GET /v1/models on an OpenAI-shaped request, in OpenAI's list shape."""
+    return {
+        'object': 'list',
+        'data': [
+            {'id': m['id'], 'object': 'model', 'created': FIXED_CREATED, 'owned_by': string_of(m.get('provider'))}
+            for m in models
+        ],
+    }
+
+
+def anthropic_model_list(models: list[Json]) -> Json:
+    """GET /v1/models on an Anthropic-shaped request (an x-api-key header), in Anthropic's list shape."""
+    return {
+        'data': [
+            {'type': 'model', 'id': m['id'], 'display_name': string_of(m.get('display_name')), 'created_at': FIXED_CREATED_AT}
+            for m in models
+        ],
+        'has_more': False,
+    }
+
+
+def anthropic_error(error_type: str, message: str) -> Json:
+    """An error in Anthropic's shape (the Messages API's error envelope)."""
+    return {'type': 'error', 'error': {'type': error_type, 'message': message}}
+
+
+def openai_error(message: str, error_type: str, code: str | None) -> Json:
+    """An error in OpenAI's shape (Chat Completions)."""
+    return {'error': {'message': message, 'type': error_type, 'code': code}}
+
+
+# --------------------------------------------------------------------------- the gateway
 
 
 class Upstream:
-    """One gateway answer: its status and a body that may be read whole or as byte chunks."""
+    """One gateway answer: its status, and a body read either whole or as it arrives."""
 
     def __init__(self, status: int, response) -> None:
         self.status = status
@@ -941,12 +967,12 @@ class Upstream:
         return 200 <= self.status < 300
 
     def chunks(self):
-        """The body's bytes as they arrive, never waiting to fill a buffer (SSE must stream)."""
+        """The body's bytes as they arrive, never buffered until full: an SSE stream must stream."""
         reader = getattr(self._response, 'read1', None) or self._response.read
         while True:
             chunk = reader(65536)
             if not chunk:
-                break
+                return
             yield chunk
 
     def text(self) -> str:
@@ -958,12 +984,27 @@ class Upstream:
     def close(self) -> None:
         try:
             self._response.close()
-        except Exception:  # a connection already closed is nothing to report
+        except Exception:  # a socket already closed is nothing to report
             pass
 
 
+def chat_completions_url() -> str:
+    """The gateway's Chat Completions route.
+
+    OPENAI_BASE_URL is the OpenAI-compatible root, which already ends in `/v1` on the trial network; a
+    base that does not gets one, so both spellings reach the same route.
+    """
+    if GATEWAY_URL == '':
+        return ''
+    return f'{GATEWAY_URL}/chat/completions' if GATEWAY_URL.endswith('/v1') else f'{GATEWAY_URL}/v1/chat/completions'
+
+
 def dial(model: str, body: Json) -> Upstream:
-    """POST one request to the gateway's Chat Completions route, naming the model this entry dialled."""
+    """POST one request to the gateway, naming `model`: the id the entry claims it dialled.
+
+    A refusal is still an answer, with a status and a body, exactly as fetch reports it. Nothing is
+    retried here; retrying is the caller's job, on the next candidate, so each gateway call is counted.
+    """
     url = chat_completions_url()
     if url == '':
         raise RuntimeError('OPENAI_BASE_URL is not set')
@@ -973,26 +1014,56 @@ def dial(model: str, body: Json) -> Upstream:
         headers['accept'] = 'text/event-stream'
     request = urllib.request.Request(url, data=data, headers=headers, method='POST')
     try:
-        response = urllib.request.urlopen(request)
+        response = OPENER.open(request, timeout=GATEWAY_TIMEOUT_SEC)
     except urllib.error.HTTPError as err:
-        # A refusal is an answer with a status and a body, exactly as Node's fetch reports it.
         return Upstream(err.code, err)
-    return Upstream(response.status, response)
+    return Upstream(getattr(response, 'status', 200), response)
 
 
-# ---------------------------------------------------------------- the HTTP server
+# --------------------------------------------------------------------------- the HTTP server
+
+
+def requirements_or_all(body: Json) -> Json:
+    """The requirements to route by: the declared union first, then the body's alone, then nothing.
+
+    A brief row whose declared requirements exclude every model must not cost the prompt. Each fallback
+    is strictly wider, so the entry always tries something, and the trail still records what refused.
+    """
+    merged = requirements_for(body)
+    if candidates_for(merged):
+        return merged
+    observed = requirements_from_body(body)
+    if candidates_for(observed):
+        return observed
+    return {}
+
+
+class Server(ThreadingHTTPServer):
+    """The listening socket, with HTTPServer's reverse-DNS lookup removed.
+
+    HTTPServer.server_bind calls socket.getfqdn(host) to fill server_name. On a host whose resolver is
+    slow or absent that call blocks for many seconds before the port is even known, which stalls
+    registration and the whole trial. The name is never read here, so it is skipped.
+    """
+
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = 'localhost'
+        self.server_port = self.server_address[1]
 
 
 class Handler(BaseHTTPRequestHandler):
-    """The entry's one server: the models route, the two completion wires, and nothing else."""
+    """The entry's one server: the models route, the two completion wires, nothing else."""
 
     protocol_version = 'HTTP/1.1'
-    server_version = 'makefun-aggregator-py/1'
+    server_version = 'makefun-aggregator-py/2'
     sys_version = ''
 
-    # The trial's stderr is the entry's own log: no access line per request.
     def log_message(self, format: str, *args: object) -> None:  # the base class's name
-        pass
+        """The trial's stderr is this entry's own log, so no access line is written per request."""
 
     def do_GET(self) -> None:  # the base class's name
         self.dispatch()
@@ -1015,23 +1086,27 @@ class Handler(BaseHTTPRequestHandler):
             if self.command == 'POST' and path == '/v1/messages':
                 self.messages()
                 return
-            wire = 'anthropic' if path == '/v1/messages' else 'openai'
+            wire = 'anthropic' if path.startswith('/v1/messages') else 'openai'
+            # A POST to an unknown route leaves its body unread, so keep-alive would read those bytes
+            # as the next request line. Close instead.
+            self.close_connection = True
             self.send_error_body(wire, 404, 'not_found', f'no route {self.command} {path}')
         except (BrokenPipeError, ConnectionResetError):
-            # The client went away mid-answer: nothing left to say, and the connection is done.
             self.close_connection = True
-        except Exception:  # one request's failure must not take the server down
+        except Exception:
             log(traceback.format_exc())
-            if not self.headers_sent:
-                wire = 'anthropic' if urlsplit(self.path).path.startswith('/v1/messages') else 'openai'
-                try:
-                    self.send_error_body(wire, 500, 'internal_error', 'the server failed to answer')
-                except (BrokenPipeError, ConnectionResetError):
-                    self.close_connection = True
+            if self.headers_sent:
+                # Mid-answer, the length is already promised: a close is the only honest end.
+                self.close_connection = True
+                return
+            wire = 'anthropic' if urlsplit(self.path).path.startswith('/v1/messages') else 'openai'
+            try:
+                self.send_error_body(wire, 500, 'internal_error', 'the server failed to answer')
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
 
     def send_json(self, status: int, body: object, extra: dict[str, str] | None = None) -> None:
-        text = json.dumps(body, separators=(',', ':'), ensure_ascii=False)
-        raw = text.encode('utf-8')
+        raw = json.dumps(body, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
         self.send_response(status)
         self.send_header('content-type', 'application/json')
         self.send_header('content-length', str(len(raw)))
@@ -1042,19 +1117,37 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def send_error_body(self, wire: str, status: int, error_type: str, message: str) -> None:
+        """One error in the client's wire, so a client of either wire reads its own envelope."""
         if wire == 'anthropic':
             self.send_json(status, anthropic_error(error_type, message))
         else:
             self.send_json(status, openai_error(message, error_type, None))
 
+    def refused(self, wire: str, status: int, text: str, rows: list[Json]) -> None:
+        """A gateway refusal as a 502 in the client's wire, reached only when every candidate failed.
+
+        The failure trail rides on the error too: a client that got no answer still learns which models
+        refused and why, rather than only that the aggregate gave up.
+        """
+        detail = '' if text == '' else f': {text[:500]}'
+        if status == 0:
+            message = 'no free model could be dialled'
+        else:
+            message = f'the gateway answered HTTP {status}{detail}'
+        extra: dict[str, str] = {}
+        if rows:
+            extra['x-makefun-upstream-failures'] = json.dumps(rows[:MAX_TRAIL_ROWS], separators=(',', ':'))
+        body = anthropic_error('api_error', message) if wire == 'anthropic' else openai_error(message, 'upstream_error', None)
+        self.send_json(502, body, extra)
+
     def stream_headers(self, extra: dict[str, str] | None = None) -> None:
+        """Open an SSE answer. http.server does not chunk a length-less response, so the close ends it."""
         self.send_response(200)
         self.send_header('content-type', 'text/event-stream')
         self.send_header('cache-control', 'no-cache')
+        self.send_header('x-accel-buffering', 'no')
         for name, value in (extra or {}).items():
             self.send_header(name, value)
-        # Python's http.server does not chunk a response without a length; the close is what ends the
-        # stream for the client. Node's http server chunks instead and keeps the connection alive.
         self.send_header('connection', 'close')
         self.headers_sent = True
         self.end_headers()
@@ -1065,7 +1158,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
     def read_json(self) -> Json | None:
-        """One client request body, or None when it is not one JSON object or is too large."""
+        """One client request body, or None when it is not one JSON object or is over the size cap."""
         length = self.headers.get('content-length')
         if length is None:
             self.close_connection = True
@@ -1075,7 +1168,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             self.close_connection = True
             return None
-        if size < 0 or size > MAX_BODY_BYTES:
+        if size < 0 or size > MAX_CLIENT_BODY:
             self.close_connection = True
             return None
         raw = self.rfile.read(size) if size > 0 else b''
@@ -1087,35 +1180,44 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return value if is_record(value) else None
 
-    def refused(self, wire: str, status: int, text: str) -> None:
-        """A refused or broken gateway call as a 502 in the client's wire: the prompt is lost."""
-        suffix = '' if text == '' else f': {text[:500]}'
-        if wire == 'anthropic':
-            self.send_error_body(wire, 502, 'api_error', f'the gateway answered HTTP {status}{suffix}')
+    # -- the routes ---------------------------------------------------------------------------------
+
+    def models(self) -> None:
+        """GET /v1/models, in the shape of the auth header: x-api-key is Anthropic, else OpenAI."""
+        listing = served_models()
+        if self.headers.get('x-api-key') is not None:
+            self.send_json(200, anthropic_model_list(listing))
         else:
-            self.send_error_body(wire, 502, 'upstream_error', f'the gateway answered HTTP {status}{suffix}')
+            self.send_json(200, openai_model_list(listing))
 
     def open_upstream(self, wire: str, body: Json, ranked: list[Json]):
-        """Dial the ranked candidates until one answers, and report the refusals it walked past.
+        """Dial the ranked candidates in order until one answers, and report each refusal.
 
-        Returns (route, upstream, extra_headers) or None when every candidate refused, in which
-        case the client already has its error. Each refusal is recorded in the optional
-        x-makefun-upstream-failures trail, at most eight rows, in call order.
+        Returns (route, upstream, extra) on the first 2xx. The trail in x-makefun-upstream-failures is
+        one row per refused call, in call order, each with exactly `status`, `code` and `model`. A
+        refusal starts that model's cooldown; a socket error is a refusal too, with status 0.
+
+        A 4xx other than 429 is not retried across models: it is the request's fault, and every other
+        model would refuse it the same way. The client gets that error at once, because spending the
+        whole candidate list on a malformed request only raises the call count.
         """
         rows: list[Json] = []
         last_status = 0
-        for candidate in ranked[:6]:
-            model_id = str(candidate['id'])
-            payload = {**body, 'model': model_id} if wire == 'openai' else anthropic_to_openai(body, model_id)
+        last_text = ''
+        for candidate in ranked[:MAX_UPSTREAM_ATTEMPTS]:
+            model_id = string_of(candidate.get('id'))
+            payload = body if wire == 'openai' else anthropic_to_openai(body, model_id)
             try:
                 upstream = dial(model_id, payload)
             except Exception:
                 rows.append({'status': 0, 'code': 'unreachable', 'model': model_id})
+                mark_cooldown(model_id, 0)
+                last_status = 0
                 continue
             if upstream.ok:
                 extra: dict[str, str] = {}
                 if rows:
-                    extra['x-makefun-upstream-failures'] = json.dumps(rows[:8], separators=(',', ':'))
+                    extra['x-makefun-upstream-failures'] = json.dumps(rows[:MAX_TRAIL_ROWS], separators=(',', ':'))
                 return candidate, upstream, extra
             text = upstream.text()
             code = ''
@@ -1126,37 +1228,25 @@ class Handler(BaseHTTPRequestHandler):
             if is_record(parsed):
                 error = parsed.get('error')
                 if is_record(error):
-                    code = str(error.get('code') or '')[:40]
+                    code = string_of(error.get('code'))[:40]
             mark_cooldown(model_id, upstream.status)
             rows.append({'status': upstream.status, 'code': code, 'model': model_id})
             last_status = upstream.status
-            try:
-                upstream.close()
-            except Exception:
-                pass
-        if last_status != 0:
-            self.refused(wire, last_status, '')
-        else:
-            self.send_error_body(wire, 502, 'upstream_unreachable', 'no free model could be dialled')
+            last_text = text
+            if upstream.status != 429 and 400 <= upstream.status < 500:
+                break
+        if rows:
+            log(f'the trail after {len(rows)} refusal(s): {json.dumps(rows[:MAX_TRAIL_ROWS], separators=(",", ":"))}')
+        self.refused(wire, last_status, last_text, rows)
         return None
 
-    # -- the routes ---------------------------------------------------------------------------------
-
-    def models(self) -> None:
-        """GET /v1/models, in the shape of the auth header the client sent."""
-        listing = served_models()
-        if self.headers.get('x-api-key') is not None:
-            self.send_json(200, anthropic_model_list(listing))
-        else:
-            self.send_json(200, openai_model_list(listing))
-
     def chat(self) -> None:
-        """POST /v1/chat/completions: an OpenAI-shaped client, answered by the best free model that serves it."""
+        """POST /v1/chat/completions: an OpenAI-shaped client, answered by the best model that serves it."""
         body = self.read_json()
         if body is None:
             self.send_error_body('openai', 400, 'invalid_request_error', 'the request body is not one JSON object')
             return
-        ranked = candidates_for(requirements_for(body))
+        ranked = candidates_for(requirements_or_all(body))
         if not ranked:
             self.send_error_body('openai', 503, 'no_free_model', 'no free model in the brief meets this request')
             return
@@ -1167,7 +1257,7 @@ class Handler(BaseHTTPRequestHandler):
         if body.get('stream') is True:
             self.stream_headers(extra)
             try:
-                for frame in openai_stream_with_model(upstream.chunks(), route['id']):
+                for frame in openai_stream_with_model(upstream.chunks(), string_of(route.get('id'))):
                     self.write_event(frame)
             finally:
                 upstream.close()
@@ -1177,15 +1267,18 @@ class Handler(BaseHTTPRequestHandler):
             parsed = json.loads(answer)
         except (json.JSONDecodeError, ValueError):
             parsed = None
-        self.send_json(200, openai_json_with_model(parsed if is_record(parsed) else {}, route['id']), extra)
+        if not is_record(parsed):
+            self.send_error_body('openai', 502, 'upstream_error', 'the gateway answered with something other than JSON')
+            return
+        self.send_json(200, openai_json_with_model(parsed, string_of(route.get('id'))), extra)
 
     def messages(self) -> None:
-        """POST /v1/messages: an Anthropic-shaped client, rewritten to Chat Completions and answered back."""
+        """POST /v1/messages: an Anthropic-shaped client, rewritten to Chat Completions and back."""
         body = self.read_json()
         if body is None:
             self.send_error_body('anthropic', 400, 'invalid_request_error', 'the request body is not one JSON object')
             return
-        ranked = candidates_for(requirements_for(body))
+        ranked = candidates_for(requirements_or_all(body))
         if not ranked:
             self.send_error_body('anthropic', 503, 'overloaded_error', 'no free model in the brief meets this request')
             return
@@ -1193,10 +1286,11 @@ class Handler(BaseHTTPRequestHandler):
         if trail is None:
             return
         route, upstream, extra = trail
+        model_id = string_of(route.get('id'))
         if body.get('stream') is True:
             self.stream_headers(extra)
             try:
-                for event in anthropic_events_from_openai(upstream.chunks(), route['id']):
+                for event in anthropic_events_from_openai(upstream.chunks(), model_id):
                     self.write_event(event)
             finally:
                 upstream.close()
@@ -1206,15 +1300,18 @@ class Handler(BaseHTTPRequestHandler):
             parsed = json.loads(answer)
         except (json.JSONDecodeError, ValueError):
             parsed = None
-        self.send_json(200, openai_to_anthropic(parsed if is_record(parsed) else {}, route['id']), extra)
+        if not is_record(parsed):
+            self.send_error_body('anthropic', 502, 'api_error', 'the gateway answered with something other than JSON')
+            return
+        self.send_json(200, openai_to_anthropic(parsed, model_id), extra)
 
 
-# ---------------------------------------------------------------- register and poll
+# --------------------------------------------------------------------------- register and poll
 
 
-def register(port: int, report: Json) -> None:
-    """POST /register with the port and the one catalog; the env answers with the trial's prompt count."""
-    body = json.dumps({'protocol_version': PROTOCOL_VERSION, 'port': port, 'catalog': report}, separators=(',', ':'), ensure_ascii=False)
+def register(port: int, catalog: Json) -> None:
+    """POST /register with the port and the catalog; the env reports the trial's prompt count back."""
+    body = json.dumps({'protocol_version': PROTOCOL_VERSION, 'port': port, 'catalog': catalog}, separators=(',', ':'), ensure_ascii=False)
     request = urllib.request.Request(
         f'{ENV_URL}/register',
         data=body.encode('utf-8'),
@@ -1222,7 +1319,7 @@ def register(port: int, report: Json) -> None:
         method='POST',
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with OPENER.open(request, timeout=5) as response:
             status = response.status
             reply_text = response.read().decode('utf-8', 'replace')
     except urllib.error.HTTPError as err:
@@ -1238,36 +1335,37 @@ def register(port: int, report: Json) -> None:
 
 
 def poll() -> None:
-    """Poll GET /work every 100 ms; exit 0 the moment it says done."""
+    """Poll GET /work every 100 ms and exit 0 the moment it says done."""
     while True:
         time.sleep(POLL_INTERVAL_SEC)
+        url = f'{ENV_URL}/work'
         try:
-            with urllib.request.urlopen(f'{ENV_URL}/work', timeout=2) as response:
+            with OPENER.open(url, timeout=2) as response:
                 if response.status != 200:
                     continue
                 work = json.loads(response.read().decode('utf-8', 'replace'))
-        except Exception:  # the env is not reachable yet: try again on the next tick
+        except Exception:
             continue
         if is_record(work) and work.get('done') is True:
+            log('the env says done: exiting 0')
             sys.stderr.flush()
+            sys.stdout.flush()
             os._exit(0)
 
 
-# ---------------------------------------------------------------- start
+# --------------------------------------------------------------------------- start
 
 
-def stop(*_: object) -> None:
-    """SIGTERM and SIGINT end the trial as Node's process.exit(0) does: exit 0, at once."""
+def shutdown(*_: object) -> None:
+    """SIGTERM and SIGINT end the trial the way Node's process.exit(0) does."""
     sys.stderr.flush()
     os._exit(0)
 
 
 def start() -> None:
-    if BRIEF['error'] is not None:
-        log(BRIEF['error'])
+    if BRIEF.get('error') is not None:
+        log(string_of(BRIEF.get('error')))
     if '--list' in sys.argv[1:]:
-        # The same document the register body carries, byte for byte: print the one built object and stop
-        # before any server starts. A process whose stdout is not flushed loses the tail, so flush it.
         sys.stdout.write(json.dumps(CATALOG, separators=(',', ':'), ensure_ascii=False) + '\n')
         sys.stdout.flush()
         return
@@ -1275,16 +1373,15 @@ def start() -> None:
         raise RuntimeError('MAKEFUN_ENV_URL is not set')
     if chat_completions_url() == '':
         raise RuntimeError('OPENAI_BASE_URL is not set')
-    server = ThreadingHTTPServer(('0.0.0.0', 0), Handler)
+    server = Server(('0.0.0.0', 0), Handler)
     try:
         port = server.server_address[1]
-        # 8080 is the env's on one layout; the OS's ephemeral range never holds it, and the guard says so.
         if port == 8080:
             raise RuntimeError('the OS picked 8080, which the env owns on one layout: restart the trial')
-        log(f'listening on 0.0.0.0:{port} with {len(served_models())} free models')
+        log(f'listening on 0.0.0.0:{port} with {len(served_models())} free models, {len(BRIEF.get("prompts") or [])} prompts')
         register(port, CATALOG)
-        signal.signal(signal.SIGTERM, stop)
-        signal.signal(signal.SIGINT, stop)
+        signal.signal(signal.SIGTERM, shutdown)
+        signal.signal(signal.SIGINT, shutdown)
         threading.Thread(target=poll, name='work-poll', daemon=True).start()
         server.serve_forever()
     finally:
@@ -1297,7 +1394,7 @@ def main() -> int:
         return 0
     except SystemExit:
         raise
-    except BaseException:  # Node's top-level catch: log the stack and exit 1
+    except BaseException:
         log(traceback.format_exc())
         return 1
 
